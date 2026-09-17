@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .venv/
 output/
+logs/
+.env
+config.toml

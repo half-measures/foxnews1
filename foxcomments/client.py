@@ -1,5 +1,6 @@
 """Client for Fox News' comment system ("hedgehog", served from api.community.fox.com)."""
 
+import html
 import logging
 import re
 import time
@@ -17,9 +18,13 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 )
-UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
-EMBED_ID_RE = re.compile(r'<hedgehog-comment-embed[^>]*\bid="([0-9a-f-]{36})"', re.I)
-TITLE_RE = re.compile(r'<meta[^>]*\bproperty="og:title"[^>]*\bcontent="([^"]*)"', re.I)
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+EMBED_ID_RE = re.compile(r'<hedgehog-comment-embed[^>]*\bid="([0-9a-f-]{36})"', re.IGNORECASE)
+TITLE_RE = re.compile(r'<meta[^>]*\bproperty="og:title"[^>]*\bcontent="([^"]*)"', re.IGNORECASE)
+
+
+class NoCommentsError(ValueError):
+    """The article has no comment section (comments disabled, or not an article page)."""
 
 
 class FoxCommentsClient:
@@ -60,6 +65,10 @@ class FoxCommentsClient:
             return resp
         raise RuntimeError("unreachable")
 
+    def get(self, url: str, **kwargs) -> requests.Response:
+        """Rate-limited GET for any URL."""
+        return self._request("GET", url, **kwargs)
+
     def _api_get(self, path: str) -> dict:
         return self._request("GET", f"{API_BASE}/{path}").json()
 
@@ -69,12 +78,12 @@ class FoxCommentsClient:
         """Return {'id', 'url', 'title'} for an article URL or a bare comment-embed UUID."""
         if UUID_RE.match(url_or_id):
             return {"id": url_or_id.lower(), "url": None, "title": None}
-        html = self._request("GET", url_or_id).text
-        m = EMBED_ID_RE.search(html)
+        page = self._request("GET", url_or_id).text
+        m = EMBED_ID_RE.search(page)
         if not m:
-            raise ValueError(f"No comment section found on {url_or_id} (comments may be disabled)")
-        title = TITLE_RE.search(html)
-        return {"id": m.group(1), "url": url_or_id, "title": title.group(1) if title else None}
+            raise NoCommentsError(f"No comment section found on {url_or_id} (comments may be disabled)")
+        title = TITLE_RE.search(page)
+        return {"id": m.group(1), "url": url_or_id, "title": html.unescape(title.group(1)) if title else None}
 
     # --- comments --------------------------------------------------------
 

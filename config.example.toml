@@ -1,0 +1,28 @@
+# Copy to config.toml and edit. Every key is optional; defaults are shown.
+
+[database]
+# The DATABASE_URL environment variable overrides this.
+url = "postgresql://foxcomments:foxcomments@127.0.0.1:5432/foxcomments"
+
+[logging]
+dir = "logs"   # daily log files for discover/work/daily; "" to disable
+
+[discovery]
+keywords = ["Trump"]     # case-insensitive whole-word match on article titles
+require_all = false      # true = every keyword must appear
+feeds = ["latest", "politics", "us", "world", "opinion", "media", "sports",
+         "entertainment", "lifestyle", "health", "science", "tech", "travel"]
+use_search = false       # also query Fox site search (older articles, 100 results/keyword)
+max_new_articles = 10    # cap on new articles queued per run; 0 = no cap
+
+[worker]
+window_minutes = 90      # spread the queue across roughly this long
+min_gap_seconds = 30     # minimum pause between articles
+max_attempts = 3         # failed articles are retried on later runs up to this many tries
+
+[scraper]
+rate = 1.0               # max requests/second to Fox
+burst = 1
+include_replies = true
+include_reactions = true
+max_pages = 0            # top-level comment pages per article (20 each); 0 = all
