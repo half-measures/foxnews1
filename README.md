@@ -137,6 +137,18 @@ Each article is saved to `output/search/<slug>.json`. A summary is written to `o
 
 You can also pass the comment-embed UUID directly instead of a URL.
 
+## Tests
+
+```
+pip install -r requirements-dev.txt
+pytest              # offline tests, about 2s
+pytest -m live      # also checks the real Fox site still works the way the scraper expects
+```
+
+- **Offline tests** never touch the network. A fake Fox server (`tests/fakes.py`) plays back API responses shaped like the real ones. A fake clock makes rate limiting, backoff and queue spacing run instantly.
+- **Database and pipeline tests** use a separate `foxcomments_test` database. It's created automatically on the Docker Postgres and wiped before each test. If Postgres isn't running, these tests are skipped. To use a different server, set `TEST_DATABASE_URL`; the database name must end in `_test`.
+- **Live tests** are off by default. Run them now and then to catch Fox changing their markup or API.
+
 ## How it works
 
 1. Loads the article HTML and reads the id from `<hedgehog-comment-embed id="...">`.

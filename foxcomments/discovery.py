@@ -67,13 +67,13 @@ def parse_published(value: str | None) -> datetime | None:
         return None
     value = value.strip()
     try:
-        return parsedate_to_datetime(value)
+        dt = parsedate_to_datetime(value)
     except (TypeError, ValueError):
-        pass
-    try:
-        dt = datetime.fromisoformat(value)
-    except ValueError:
-        return None
+        try:
+            dt = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    # Always timezone-aware: "-0000" and bare ISO dates come back naive, and naive/aware can't be compared.
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 

@@ -38,6 +38,19 @@ def _format_comment(raw: dict, users: dict) -> dict:
     }
 
 
+def _listed_ids(page: dict, raw_comments: dict) -> list[str]:
+    """Comment ids from a page's list, skipping any whose object wasn't included."""
+    ids = []
+    for item in page.get("list2", []):
+        if item.get("typename") != "Comment":
+            continue
+        if item["id"] in raw_comments:
+            ids.append(item["id"])
+        else:
+            log.warning("Comment %s listed but not returned by the API; skipping", item["id"])
+    return ids
+
+
 def scrape_article(
     client: FoxCommentsClient,
     url_or_id: str,
@@ -54,7 +67,7 @@ def scrape_article(
 
     for n, page in enumerate(client.comment_pages(article["id"], max_pages=max_pages), 1):
         _index_objects(page, users, raw_comments)
-        top_ids.extend(item["id"] for item in page.get("list2", []) if item.get("typename") == "Comment")
+        top_ids.extend(_listed_ids(page, raw_comments))
         log.info("Comment page %d: %d top-level comments so far", n, len(top_ids))
 
     top_level = []
@@ -66,7 +79,7 @@ def scrape_article(
             reply_ids = []
             for page in client.reply_pages(cid):
                 _index_objects(page, users, raw_comments)
-                reply_ids.extend(item["id"] for item in page.get("list2", []) if item.get("typename") == "Comment")
+                reply_ids.extend(_listed_ids(page, raw_comments))
             comment["replies"] = [_format_comment(raw_comments[rid], users) for rid in reply_ids]
             all_ids.extend(reply_ids)
             if i % 10 == 0 or i == len(top_ids):
