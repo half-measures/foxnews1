@@ -21,6 +21,7 @@ def test_missing_file_gives_defaults(tmp_path):
     assert "127.0.0.1" in cfg.database_url  # localhost hangs with Docker Desktop on Windows
     assert cfg.discovery.keywords == ["Trump"]
     assert cfg.discovery.feeds == FEEDS
+    assert cfg.discovery.min_article_age_hours == 24
     assert cfg.worker.window_minutes == 90
     assert cfg.scraper.rate == 1.0
 

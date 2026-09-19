@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from foxcomments.discovery import Article
 
 
@@ -36,6 +38,60 @@ def status_of(db, article_id):
     return db.conn.execute("SELECT * FROM articles WHERE id = %s", (article_id,)).fetchone()
 
 
+def test_connects_lazily_and_reopens_after_disconnect(database_url):
+    from foxcomments.db import Database
+
+    database = Database(database_url)
+    assert database._conn is None, "opening the object must not open a connection"
+    database.init_schema()
+    assert database._conn is not None
+
+    database.disconnect()
+    assert database._conn is None
+    assert database.now() is not None  # reopens on demand
+    database.close()
+
+
+def test_survives_the_connection_being_killed_underneath_it(db, database_url):
+    import psycopg
+
+    pid = db.conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"]
+    with psycopg.connect(database_url, autocommit=True) as killer:
+        killer.execute("SELECT pg_terminate_backend(%s)", (pid,))
+
+    # The old socket is dead; the next call must reconnect instead of blowing up.
+    assert db.now() is not None
+    assert db.conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"] != pid
+
+
+def test_writes_still_land_after_a_dropped_connection(db, database_url):
+    import psycopg
+
+    db.enqueue([art("story")])
+    job = db.claim_next(db.now(), 3)
+    pid = db.conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"]
+    with psycopg.connect(database_url, autocommit=True) as killer:
+        killer.execute("SELECT pg_terminate_backend(%s)", (pid,))
+
+    db.save_scrape(job["id"], scrape_result())
+    assert status_of(db, job["id"])["status"] == "done"
+    assert db.conn.execute("SELECT count(*) AS n FROM comments").fetchone()["n"] == 2
+
+
+def test_connection_failures_are_retried_then_raised(monkeypatch):
+    import psycopg
+
+    from foxcomments import db as db_module
+
+    waits = []
+    monkeypatch.setattr(db_module.time, "sleep", waits.append)
+    unreachable = "postgresql://nobody@127.0.0.1:1/none"
+
+    with pytest.raises(psycopg.OperationalError):
+        db_module.Database(unreachable, connect_attempts=3, connect_timeout=1).now()
+    assert waits == [2, 4]
+
+
 def test_schema_init_is_idempotent(db):
     db.init_schema()
     db.init_schema()
@@ -51,6 +107,46 @@ def test_enqueue_inserts_new_and_ignores_duplicates(db):
     assert row["status"] == "pending"
     assert row["published_at"] == published
     assert row["matched_keywords"] == ["Trump"]
+
+
+def close_to(actual, expected, tolerance=timedelta(minutes=1)):
+    """pytest.approx ignores a timedelta tolerance for datetimes, so compare explicitly."""
+    return abs(actual - expected) < tolerance
+
+
+def test_enqueue_holds_fresh_articles_until_they_are_old_enough(db):
+    now = db.now()
+    just_published = art("fresh", published=now - timedelta(hours=1))
+    old = art("old", published=now - timedelta(days=3))
+    undated = art("undated")
+
+    db.enqueue([just_published, old, undated], min_age_hours=24)
+
+    rows = {r["url"].rsplit("/", 1)[-1]: r for r in db.conn.execute("SELECT * FROM articles").fetchall()}
+    assert close_to(rows["fresh"]["scrape_after"], now + timedelta(hours=23))
+    assert rows["old"]["scrape_after"] <= db.now(), "already past the wait: scrape on this run"
+    # No publication date (site search sometimes omits it): wait from discovery instead.
+    assert close_to(rows["undated"]["scrape_after"], now + timedelta(hours=24))
+
+    run = db.now()
+    assert db.count_ready(run, 3) == 1
+    assert db.claim_next(run, 3)["url"].endswith("/old")
+    assert db.claim_next(run, 3) is None
+    assert db.queue_summary()["waiting"] == 2
+
+
+def test_matured_article_becomes_claimable(db):
+    db.enqueue([art("soon", published=db.now())], min_age_hours=24)
+    assert db.count_ready(db.now(), 3) == 0
+
+    db.conn.execute("UPDATE articles SET scrape_after = now() - interval '1 minute'")
+    assert db.claim_next(db.now(), 3) is not None
+    assert db.queue_summary()["waiting"] == 0
+
+
+def test_min_age_zero_queues_for_immediate_scraping(db):
+    db.enqueue([art("now", published=db.now())], min_age_hours=0)
+    assert db.count_ready(db.now(), 3) == 1
 
 
 def test_known_urls_empty_input(db):

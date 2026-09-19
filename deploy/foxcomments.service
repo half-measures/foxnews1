@@ -1,0 +1,32 @@
+[Unit]
+Description=Fox News comment scraper
+Documentation=https://github.com/  # your repo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=foxcomments
+WorkingDirectory=/opt/foxcomments
+# DATABASE_URL=postgresql://user:password@dbhost:5432/foxcomments  (chmod 600, root-owned)
+EnvironmentFile=-/etc/foxcomments.env
+ExecStart=/opt/foxcomments/.venv/bin/python -m foxcomments service
+Restart=on-failure
+RestartSec=60
+
+# SIGTERM makes the scraper put the article it is working on back in the queue
+# before exiting, so a restart never strands one.
+KillSignal=SIGTERM
+TimeoutStopSec=180
+
+# Unbuffered so journalctl shows progress live.
+Environment=PYTHONUNBUFFERED=1
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/foxcomments/logs
+
+[Install]
+WantedBy=multi-user.target

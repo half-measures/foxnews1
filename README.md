@@ -16,12 +16,14 @@ pip install -r requirements.txt
 
 ```
 docker compose up -d --wait             # Postgres 17 on 127.0.0.1:5432
-copy config.example.toml config.toml    # then edit keywords etc.
+cp config.example.toml config.toml      # then edit keywords etc.
 python -m foxcomments db-init           # create tables (also runs automatically)
 python -m foxcomments discover --dry-run
 ```
 
-Use `127.0.0.1` in the database URL, not `localhost`. With Docker Desktop on Windows, `localhost` tries IPv6 first and the connection hangs.
+Use `127.0.0.1` in the database URL rather than `localhost`: with Docker Desktop on Windows, `localhost` resolves to IPv6 first and the connection hangs.
+
+Deploying to a headless Linux host is in **[deploy/README.md](deploy/README.md)**.
 
 ### How a daily run works
 
@@ -30,7 +32,9 @@ Use `127.0.0.1` in the database URL, not `localhost`. With Docker Desktop on Win
 1. **Discover.** It scans the configured feeds (and site search, if `use_search = true`) for titles that match your keywords. It skips articles already in the database. Up to `max_new_articles` of the newest matches are added to the queue as `pending`. Extra matches beyond the cap aren't queued. They're found again next run if they're still in the feeds.
 2. **Work.** It scrapes every ready article, spacing them so the queue finishes close to the end of `window_minutes`. For example, 10 articles in 90 minutes means about one every 9 minutes, with ±25% randomness. The wait is recalculated after each article, so slow scrapes don't push the run past the window.
 
-Each article is scraped once. Its status moves through `pending` → `in_progress` → one of:
+**Articles mature before they're scraped.** Comments keep arriving for a day or two after publication, and each article is scraped only once, so scraping a fresh article would capture almost nothing. Every article gets a `scrape_after` time of `min_article_age_hours` (24 by default) past its publication date, and the work step ignores it until then. Discovery still records it immediately, because feeds drop articles within hours and a missed article never comes back. So an article found this morning is typically scraped by tomorrow's run. Articles with no publication date (site search sometimes omits it) wait that long from when they were found. Set `min_article_age_hours = 0` to scrape as soon as an article is found.
+
+Each article is scraped once, at least `min_article_age_hours` after it was published. Its status moves through `pending` → `in_progress` → one of:
 - `done`
 - `no_comments`: the article has comments disabled
 - `failed`: an error. It's retried on later runs until it has had `max_attempts` tries.
@@ -41,22 +45,31 @@ Each run gets a row in the `runs` table. Logs go to `logs/foxcomments-YYYY-MM-DD
 
 You can run the steps separately with `discover` and `work --window 30`. `work --window 0` scrapes without spacing. `status` shows queue counts, recent articles and recent runs.
 
-### Scheduling (Windows Task Scheduler)
-
-`scripts/run_daily.ps1` starts Docker Desktop if it isn't running, brings up the database container, then runs `daily`. It uses `.venv\Scripts\python.exe` if that exists, and `python` otherwise. To register it for 7:00 AM every day:
+### Running it unattended
 
 ```
-schtasks /Create /TN "FoxComments Daily" /SC DAILY /ST 07:00 ^
-  /TR "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\Mick\programming\foxnews1\scripts\run_daily.ps1"
+python -m foxcomments service
 ```
 
-The task only runs while you're logged in, because Docker Desktop needs a user session. Test it with `schtasks /Run /TN "FoxComments Daily"`.
+This stays running and does the daily run at `daily_at` (07:00 by default, local time). It's plain Python — no cron, no Task Scheduler. It wakes hourly, so a machine that was off at 07:00 catches up when it comes back instead of skipping the day, and because each run is recorded in the `runs` table it runs at most once per scheduled slot.
+
+On SIGTERM or SIGINT it puts the article it was working on back in the queue, then exits, so a restart never strands one.
+
+**[deploy/README.md](deploy/README.md) has the headless Linux setup**: a systemd unit, pointing at a remote database, log rotation, and how to reach the database for ETL.
+
+`python -m foxcomments daily` is still a one-shot run that exits when finished, if you prefer cron or a systemd timer. Concurrent runs are safe: articles are claimed with `FOR UPDATE SKIP LOCKED`, so two processes never scrape the same one.
+
+### Database connections
+
+The connection is opened when there's something to read or write and dropped during the long gaps between articles, rather than held open for the whole window. That matters for a database on another host, where an idle session gets cut by a firewall, a NAT table or `idle_session_timeout`. Connections also use TCP keepalives, retry 3 times with backoff when the server isn't reachable, and reconnect once automatically if the connection died between uses.
+
+Set `DATABASE_URL` to point at a database anywhere; it overrides `config.toml` and keeps the password out of the repo.
 
 ### Tables
 
 | Table | Contents |
 |---|---|
-| `articles` | One row per discovered article, including queue status, matched keywords, publish date and comment counts |
+| `articles` | One row per discovered article, including queue status, matched keywords, publish date, `scrape_after` (when it becomes eligible) and comment counts |
 | `comments` | Top-level comments and replies (`parent_comment_id` is set on replies), with body, timestamps, `reactions` JSON, and `agree_count` / `disagree_count` columns |
 | `authors` | Commenter id, username and display name, plus first and last seen times |
 | `runs` | Stats and errors for each run |

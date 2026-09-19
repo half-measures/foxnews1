@@ -1,6 +1,6 @@
 """Pipeline tests: real Postgres, fake Fox server, fake clock."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -95,6 +95,27 @@ def test_discover_through_real_feed_parsing(db, client, session, cfg):
     assert pipeline.discover(db, client, cfg)["queued"] == 2
 
 
+def test_discover_queues_fresh_articles_but_work_leaves_them_to_mature(
+        db, client, session, cfg, pipeline_clock, monkeypatch):
+    now = db.now()
+    fresh_url = fox_article(session, "fresh")
+    old_url = fox_article(session, "old")
+    monkeypatch.setattr(pipeline, "find_articles", lambda *a, **k: [
+        found(fresh_url, now - timedelta(hours=2)),
+        found(old_url, now - timedelta(days=2)),
+    ])
+    cfg.discovery.min_article_age_hours = 24
+
+    assert pipeline.discover(db, client, cfg)["queued"] == 2
+    assert pipeline.work(db, client, cfg, window_minutes=0) == {"done": 1, "comments": 2, "replies": 0}
+    assert statuses(db) == {"fresh": "pending", "old": "done"}
+
+    # Once it has matured, the next run picks it up.
+    db.conn.execute("UPDATE articles SET scrape_after = now() WHERE status = 'pending'")
+    assert pipeline.work(db, client, cfg, window_minutes=0)["done"] == 1
+    assert statuses(db) == {"fresh": "done", "old": "done"}
+
+
 # --- work --------------------------------------------------------------------
 
 def test_work_scrapes_queue_and_spreads_it_across_window(db, client, session, cfg, pipeline_clock):
@@ -116,6 +137,22 @@ def test_work_uses_min_gap_once_window_is_used_up(db, client, session, cfg, pipe
         db.enqueue([found(fox_article(session, s))])
     pipeline.work(db, client, cfg, window_minutes=0)
     assert [s for s in pipeline_clock.sleeps if s >= 1] == [30, 30]
+
+
+def test_work_lets_go_of_the_connection_between_articles(db, client, session, cfg, pipeline_clock):
+    """A remote database shouldn't see an idle session across the multi-minute gaps."""
+    for slug in ("a", "b"):
+        db.enqueue([found(fox_article(session, slug))])
+
+    disconnects = []
+    real_disconnect = db.disconnect
+    db.disconnect = lambda: (disconnects.append(pipeline_clock.now), real_disconnect())
+
+    pipeline.work(db, client, cfg)
+
+    assert disconnects, "expected the connection to be dropped before sleeping"
+    # Each drop happens before a sleep, so the gaps are spent with no connection open.
+    assert len(disconnects) == len([s for s in pipeline_clock.sleeps if s >= cfg.worker.min_gap_seconds])
 
 
 def test_work_with_empty_queue(db, client, cfg, pipeline_clock):

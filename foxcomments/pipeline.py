@@ -32,8 +32,10 @@ def discover(db: Database, client: FoxCommentsClient, cfg: Config, dry_run: bool
         log.info("  (%d more new matches over the cap of %d; they'll be picked up next run if still in the feeds)",
                  len(new) - len(capped), d.max_new_articles)
 
-    queued = 0 if dry_run else db.enqueue(capped)
+    queued = 0 if dry_run else db.enqueue(capped, min_age_hours=d.min_article_age_hours)
     stats = {"matched": len(found), "already_known": len(known), "new": len(new), "queued": queued}
+    if queued and d.min_article_age_hours:
+        log.info("  queued; each is scraped %gh after publication", d.min_article_age_hours)
     log.info("Discovery: %s%s", stats, " (dry run, nothing queued)" if dry_run else "")
     return stats
 
@@ -51,7 +53,9 @@ def work(db: Database, client: FoxCommentsClient, cfg: Config, window_minutes: f
         log.info("Re-queued %d stale in-progress article(s)", reset)
 
     total = db.count_ready(run_started, w.max_attempts)
-    log.info("Queue: %d article(s) ready; window %.0f min", total, window / 60)
+    waiting = db.queue_summary()["waiting"]
+    log.info("Queue: %d article(s) ready%s; window %.0f min",
+             total, f" ({waiting} still maturing)" if waiting else "", window / 60)
 
     while (job := db.claim_next(run_started, w.max_attempts)) is not None:
         log.info("Scraping (attempt %d): %s", job["attempts"], job["title"])
@@ -90,6 +94,7 @@ def work(db: Database, client: FoxCommentsClient, cfg: Config, window_minutes: f
         time_left = deadline - time.monotonic()
         gap = max(w.min_gap_seconds, time_left / remaining) * random.uniform(0.75, 1.25)
         log.info("%d left; next article in %.1f min", remaining, gap / 60)
+        db.disconnect()  # don't hold an idle connection across a multi-minute gap
         time.sleep(gap)
 
     log.info("Work finished: %s", dict(stats))

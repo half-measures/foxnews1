@@ -13,7 +13,11 @@ require_all = false      # true = every keyword must appear
 feeds = ["latest", "politics", "us", "world", "opinion", "media", "sports",
          "entertainment", "lifestyle", "health", "science", "tech", "travel"]
 use_search = false       # also query Fox site search (older articles, 100 results/keyword)
-max_new_articles = 10    # cap on new articles queued per run; 0 = no cap
+max_new_articles = 30    # cap on new articles queued per run; 0 = no cap
+min_article_age_hours = 24  # wait this long after publication before scraping (lets comments accumulate)
+
+[schedule]
+daily_at = "07:00"       # local time the `service` command runs discover + work
 
 [worker]
 window_minutes = 90      # spread the queue across roughly this long

@@ -16,7 +16,8 @@ class DiscoveryConfig:
     require_all: bool = False
     feeds: list[str] = field(default_factory=lambda: list(FEEDS))
     use_search: bool = False
-    max_new_articles: int = 10  # per discover run; 0 = no cap
+    max_new_articles: int = 30        # per discover run; 0 = no cap
+    min_article_age_hours: float = 24  # wait this long after publication before scraping
 
 
 @dataclass
@@ -24,6 +25,11 @@ class WorkerConfig:
     window_minutes: float = 90    # spread the queue across this long
     min_gap_seconds: float = 30   # never start articles closer together than this
     max_attempts: int = 3         # failed articles are retried on later runs up to this many tries
+
+
+@dataclass
+class ScheduleConfig:
+    daily_at: str = "07:00"  # local time the service runs discover + work
 
 
 @dataclass
@@ -40,6 +46,7 @@ class Config:
     database_url: str = DEFAULT_DATABASE_URL
     log_dir: str = "logs"
     discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
+    schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     scraper: ScraperConfig = field(default_factory=ScraperConfig)
 
@@ -63,6 +70,7 @@ def load_config(path: str | Path | None) -> Config:
         database_url=db.get("url", DEFAULT_DATABASE_URL),
         log_dir=raw.get("logging", {}).get("dir", "logs"),
         discovery=_fill(DiscoveryConfig, raw.get("discovery", {}), "discovery"),
+        schedule=_fill(ScheduleConfig, raw.get("schedule", {}), "schedule"),
         worker=_fill(WorkerConfig, raw.get("worker", {}), "worker"),
         scraper=_fill(ScraperConfig, raw.get("scraper", {}), "scraper"),
     )
@@ -73,4 +81,7 @@ def load_config(path: str | Path | None) -> Config:
         raise ValueError(f"Unknown feed(s): {', '.join(sorted(bad_feeds))}. Choices: {' '.join(FEEDS)}")
     if not cfg.discovery.keywords:
         raise ValueError("[discovery] keywords must not be empty")
+
+    from .service import parse_daily_at  # validate the schedule up front, not at 07:00
+    parse_daily_at(cfg.schedule.daily_at)
     return cfg

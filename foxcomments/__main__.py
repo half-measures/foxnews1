@@ -18,7 +18,7 @@ import json
 import logging
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .client import FoxCommentsClient
@@ -28,7 +28,7 @@ from .rate_limiter import RateLimiter
 from .scraper import scrape_article
 
 JSON_COMMANDS = {"scrape", "search"}
-DB_COMMANDS = {"db-init", "discover", "work", "daily", "status"}
+DB_COMMANDS = {"db-init", "discover", "work", "daily", "status", "service"}
 COMMANDS = JSON_COMMANDS | DB_COMMANDS
 
 
@@ -124,6 +124,16 @@ def cmd_db(args, cfg: Config) -> None:
             _print_status(db)
             return
 
+        if args.command == "service":
+            from .service import install_shutdown_handlers, run_service
+
+            install_shutdown_handlers()
+            try:
+                run_service(db, lambda: _client_from_config(cfg), cfg)
+            except KeyboardInterrupt as exc:
+                logging.info("Stopping: %s", exc or "interrupted")
+            return
+
         client = _client_from_config(cfg)
         dry_run = getattr(args, "dry_run", False)
         run_id = None if dry_run else db.start_run(args.command)
@@ -144,10 +154,13 @@ def cmd_db(args, cfg: Config) -> None:
 def _print_status(db) -> None:
     summary = db.queue_summary()
     print(f"Articles by status: {summary['articles'] or '{}'}")
-    print(f"Comments stored: {summary['comments']}   Authors: {summary['authors']}")
+    print(f"Comments stored: {summary['comments']}   Authors: {summary['authors']}"
+          + (f"   Waiting to mature: {summary['waiting']}" if summary["waiting"] else ""))
     print("\nRecent articles:")
     for a in db.recent_articles():
         counts = f"{a['top_level_count']}+{a['reply_count']}" if a["top_level_count"] is not None else "-"
+        if a["status"] == "pending" and a["scrape_after"] > datetime.now(timezone.utc):
+            counts = f"@{a['scrape_after'].astimezone():%m-%d %H:%M}"
         print(f"  {a['discovered_at'].astimezone():%Y-%m-%d %H:%M}  {a['status']:<11} {counts:>9}  {a['title'][:80]}")
         if a["last_error"] and a["status"] != "done":
             print(f"{'':30}! {a['last_error'][:100]}")
@@ -206,6 +219,7 @@ def main() -> None:
         ("work", "Scrape queued articles, spread across a time window"),
         ("daily", "discover, then work (what the scheduled task runs)"),
         ("status", "Show queue and database summary"),
+        ("service", "Stay running and do the daily run at the scheduled time"),
     ]:
         dp = sub.add_parser(name, help=help_text)
         dp.add_argument("-c", "--config", default="config.toml", help="Config file (default: config.toml)")
@@ -220,7 +234,7 @@ def main() -> None:
     if args.command in DB_COMMANDS:
         cfg = load_config(args.config)
         log_file = None
-        if args.command in ("discover", "work", "daily") and cfg.log_dir:
+        if args.command in ("discover", "work", "daily", "service") and cfg.log_dir:
             log_file = Path(cfg.log_dir) / f"foxcomments-{datetime.now():%Y-%m-%d}.log"
         _setup_logging(args.verbose, log_file)
         cmd_db(args, cfg)

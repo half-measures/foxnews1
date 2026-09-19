@@ -14,12 +14,14 @@ CREATE TABLE IF NOT EXISTS articles (
     attempts          INT         NOT NULL DEFAULT 0,
     last_error        TEXT,
     discovered_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    scrape_after      TIMESTAMPTZ NOT NULL DEFAULT now(),   -- let the article gather comments first
     last_attempt_at   TIMESTAMPTZ,
     scraped_at        TIMESTAMPTZ,
     top_level_count   INT,
     reply_count       INT
 );
-CREATE INDEX IF NOT EXISTS articles_queue_idx ON articles (status, discovered_at);
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS scrape_after TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS articles_queue_idx ON articles (status, scrape_after, discovered_at);
 CREATE INDEX IF NOT EXISTS articles_published_idx ON articles (published_at);
 
 CREATE TABLE IF NOT EXISTS authors (
