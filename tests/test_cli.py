@@ -31,7 +31,13 @@ def test_scrape_writes_json_with_or_without_subcommand(monkeypatch, tmp_path, fa
     out = tmp_path / "out.json"
     run(monkeypatch, *prefix, URL, "-o", str(out), "--no-replies", "--max-pages", "2")
     assert json.loads(out.read_text(encoding="utf-8"))["article"]["url"] == URL
-    assert fake_scrape == [(URL, {"include_replies": False, "include_reactions": True, "max_pages": 2})]
+    assert fake_scrape == [(URL, {"include_replies": False, "include_reactions": True,
+                                  "include_raw": False, "max_pages": 2})]
+
+
+def test_raw_flag_is_passed_through(monkeypatch, tmp_path, fake_scrape):
+    run(monkeypatch, URL, "-o", str(tmp_path / "o.json"), "--raw")
+    assert fake_scrape[0][1]["include_raw"] is True
 
 
 def test_scrape_default_output_path_uses_slug(monkeypatch, tmp_path, fake_scrape):

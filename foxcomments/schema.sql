@@ -54,8 +54,10 @@ CREATE TABLE IF NOT EXISTS comments (
     disagree_count    INT GENERATED ALWAYS AS (COALESCE((reactions ->> 'Disagree')::INT, 0)) STORED,
     images            JSONB       NOT NULL DEFAULT '[]',
     videos            JSONB       NOT NULL DEFAULT '[]',
+    raw               JSONB,                       -- the untouched API object, for fields we don't model
     scraped_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE comments ADD COLUMN IF NOT EXISTS raw JSONB;
 CREATE INDEX IF NOT EXISTS comments_article_idx ON comments (article_id);
 CREATE INDEX IF NOT EXISTS comments_author_idx ON comments (author_id);
 CREATE INDEX IF NOT EXISTS comments_parent_idx ON comments (parent_comment_id);

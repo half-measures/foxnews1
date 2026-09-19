@@ -65,6 +65,7 @@ def work(db: Database, client: FoxCommentsClient, cfg: Config, window_minutes: f
                 client, job["url"],
                 include_replies=s.include_replies,
                 include_reactions=s.include_reactions,
+                include_raw=s.store_raw,
                 max_pages=s.max_pages or None,
             )
         except NoCommentsError as exc:

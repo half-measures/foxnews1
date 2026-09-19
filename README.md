@@ -70,7 +70,7 @@ Set `DATABASE_URL` to point at a database anywhere; it overrides `config.toml` a
 | Table | Contents |
 |---|---|
 | `articles` | One row per discovered article, including queue status, matched keywords, publish date, `scrape_after` (when it becomes eligible) and comment counts |
-| `comments` | Top-level comments and replies (`parent_comment_id` is set on replies), with body, timestamps, `reactions` JSON, and `agree_count` / `disagree_count` columns |
+| `comments` | Top-level comments and replies (`parent_comment_id` is set on replies), with body, timestamps, `reactions` JSON, `agree_count` / `disagree_count` columns, and `raw` holding the untouched API object |
 | `authors` | Commenter id, username and display name, plus first and last seen times |
 | `runs` | Stats and errors for each run |
 
@@ -146,6 +146,7 @@ Each article is saved to `output/search/<slug>.json`. A summary is written to `o
 | `--max-pages` | all | Limit top-level comment pages (20 comments each) |
 | `--no-replies` | | Skip replies (one extra request per top-level comment) |
 | `--no-reactions` | | Skip Agree/Disagree counts |
+| `--raw` | off | Include each comment's full API object under `raw` (roughly doubles file size) |
 | `-v` | | Debug logging |
 
 You can also pass the comment-embed UUID directly instead of a URL.
@@ -186,6 +187,7 @@ Every request goes through one shared rate limiter, including feed and search re
       "author": {"id": "...", "username": "...", "display_name": "..."},
       "images": [], "videos": [],
       "reaction_total": 8, "reactions": {"Agree": 5, "Disagree": 3},
+      "raw": { "...the untouched API object; only with --raw..." },
       "replies": [ { "...same fields, parent_comment_id set..." } ]
     }
   ]

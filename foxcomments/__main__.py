@@ -48,6 +48,8 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--max-pages", type=int, help="Stop after N pages of top-level comments (20 per page)")
     p.add_argument("--no-replies", action="store_true", help="Skip fetching replies")
     p.add_argument("--no-reactions", action="store_true", help="Skip fetching reaction counts")
+    p.add_argument("--raw", action="store_true",
+                   help="Include each comment's full API object under \"raw\" (roughly doubles file size)")
     p.add_argument("-v", "--verbose", action="store_true")
 
 
@@ -55,6 +57,7 @@ def _scrape_kwargs(args) -> dict:
     return {
         "include_replies": not args.no_replies,
         "include_reactions": not args.no_reactions,
+        "include_raw": args.raw,
         "max_pages": args.max_pages,
     }
 

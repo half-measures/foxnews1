@@ -120,6 +120,13 @@ attachments keep their original JSON, and nothing is normalized, deduplicated or
 interpreted. A separate program can treat them as the source of truth and build whatever it
 likes downstream, re-deriving everything from scratch whenever it wants.
 
+`comments.raw` holds each comment's complete API object, including the ~20 fields the
+columns don't model (`flagged`, `sensitiveMaterial`, `quoted`, `threadParent`,
+`scoreComputed`, `links` and friends), so a later ETL can mine something this schema never
+anticipated. Articles are scraped once, so anything not captured at scrape time is gone for
+good; that column is the insurance. Set `store_raw = false` under `[scraper]` to skip it and
+roughly halve the storage.
+
 Guarantees this side of the line upholds:
 
 - **Rows are never deleted or renumbered.** The scraper only inserts and upserts, so there

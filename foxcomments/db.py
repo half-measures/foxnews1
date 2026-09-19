@@ -233,13 +233,14 @@ class Database:
                     """
                     INSERT INTO comments (
                         id, article_id, parent_comment_id, author_id, body, created_at, updated_at,
-                        edited, deleted, pinned, score, reaction_total, reactions, images, videos
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        edited, deleted, pinned, score, reaction_total, reactions, images, videos, raw
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO UPDATE SET
                         body = EXCLUDED.body, updated_at = EXCLUDED.updated_at, edited = EXCLUDED.edited,
                         deleted = EXCLUDED.deleted, pinned = EXCLUDED.pinned, score = EXCLUDED.score,
                         reaction_total = EXCLUDED.reaction_total, reactions = EXCLUDED.reactions,
-                        images = EXCLUDED.images, videos = EXCLUDED.videos, scraped_at = now()
+                        images = EXCLUDED.images, videos = EXCLUDED.videos,
+                        raw = COALESCE(EXCLUDED.raw, comments.raw), scraped_at = now()
                     """,
                     [
                         (
@@ -247,6 +248,7 @@ class Database:
                             c["created"], c["updated"], c["edited"], c["deleted"], c["pinned"], c["score"],
                             c.get("reaction_total", 0), Jsonb(c.get("reactions", {})),
                             Jsonb(c["images"]), Jsonb(c["videos"]),
+                            Jsonb(c["raw"]) if c.get("raw") is not None else None,
                         )
                         for c in flat
                     ],

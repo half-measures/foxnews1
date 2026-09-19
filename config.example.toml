@@ -29,4 +29,5 @@ rate = 1.0               # max requests/second to Fox
 burst = 1
 include_replies = true
 include_reactions = true
+store_raw = true         # keep each comment's full API object in comments.raw
 max_pages = 0            # top-level comment pages per article (20 each); 0 = all

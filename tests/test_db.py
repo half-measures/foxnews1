@@ -239,6 +239,31 @@ def test_save_scrape_stores_comments_authors_and_marks_done(db):
     assert (author["id"], author["username"], author["display_name"]) == ("u1", "alice", "Alice")
 
 
+def test_raw_api_object_round_trips(db):
+    db.enqueue([art("story")])
+    job = db.claim_next(db.now(), 3)
+    result = scrape_result()
+    result["comments"][0]["raw"] = {"id": "c1", "flagged": 2, "sensitiveMaterial": True, "quoted": None}
+
+    db.save_scrape(job["id"], result)
+
+    rows = {r["id"]: r for r in db.conn.execute("SELECT id, raw FROM comments").fetchall()}
+    assert rows["c1"]["raw"] == {"id": "c1", "flagged": 2, "sensitiveMaterial": True, "quoted": None}
+    assert rows["r1"]["raw"] is None  # no raw supplied for this one
+
+
+def test_resaving_without_raw_does_not_erase_it(db):
+    db.enqueue([art("story")])
+    job = db.claim_next(db.now(), 3)
+    with_raw = scrape_result()
+    with_raw["comments"][0]["raw"] = {"flagged": 7}
+    db.save_scrape(job["id"], with_raw)
+
+    db.save_scrape(job["id"], scrape_result())  # older-style result, no raw key
+
+    assert db.conn.execute("SELECT raw FROM comments WHERE id = 'c1'").fetchone()["raw"] == {"flagged": 7}
+
+
 def test_save_scrape_keeps_feed_title_when_page_title_missing(db):
     db.enqueue([art("story", title="Feed title")])
     job = db.claim_next(db.now(), 3)

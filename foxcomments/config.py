@@ -38,7 +38,8 @@ class ScraperConfig:
     burst: int = 1
     include_replies: bool = True
     include_reactions: bool = True
-    max_pages: int = 0  # 0 = all pages
+    store_raw: bool = True  # keep each comment's full API object in comments.raw
+    max_pages: int = 0      # 0 = all pages
 
 
 @dataclass

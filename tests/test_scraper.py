@@ -73,6 +73,22 @@ def test_max_pages_limits_top_level_comments(client, article):
     assert [c["id"] for c in result["comments"]] == ["c1", "c2"]
 
 
+def test_raw_api_object_is_kept_by_default(client, article):
+    result = scrape_article(client, URL)
+    c1 = result["comments"][0]
+    # Fields the formatter drops are still recoverable from raw.
+    assert c1["raw"]["id"] == "c1"
+    assert c1["raw"]["threadParent"] is None
+    assert c1["raw"]["creator"] == "u1"
+    assert c1["replies"][0]["raw"]["id"] == "r1"
+
+
+def test_raw_can_be_left_out(client, article):
+    result = scrape_article(client, URL, include_raw=False)
+    assert "raw" not in result["comments"][0]
+    assert "raw" not in result["comments"][0]["replies"][0]
+
+
 def test_unknown_author_is_kept_with_null_names(client, session):
     session.pages[URL] = article_html(EMBED)
     session.comment_pages[EMBED] = {"0": page([comment("c1", creator="ghost")])}  # no User object

@@ -16,9 +16,9 @@ def _index_objects(page: dict, users: dict, comments: dict) -> None:
             comments[obj["id"]] = obj
 
 
-def _format_comment(raw: dict, users: dict) -> dict:
+def _format_comment(raw: dict, users: dict, include_raw: bool = True) -> dict:
     user = users.get(raw.get("creator"), {})
-    return {
+    formatted = {
         "id": raw["id"],
         "body": raw.get("body"),
         "created": raw.get("created"),
@@ -36,6 +36,11 @@ def _format_comment(raw: dict, users: dict) -> dict:
         "images": raw.get("images") or [],
         "videos": raw.get("videos") or [],
     }
+    if include_raw:
+        # Keep the whole API object: each article is scraped once, so a field dropped
+        # here is gone for good.
+        formatted["raw"] = raw
+    return formatted
 
 
 def _listed_ids(page: dict, raw_comments: dict) -> list[str]:
@@ -56,6 +61,7 @@ def scrape_article(
     url_or_id: str,
     include_replies: bool = True,
     include_reactions: bool = True,
+    include_raw: bool = True,
     max_pages: int | None = None,
 ) -> dict:
     article = client.resolve_article(url_or_id)
@@ -73,14 +79,14 @@ def scrape_article(
     top_level = []
     all_ids = list(top_ids)
     for i, cid in enumerate(top_ids, 1):
-        comment = _format_comment(raw_comments[cid], users)
+        comment = _format_comment(raw_comments[cid], users, include_raw)
         comment["replies"] = []
         if include_replies:
             reply_ids = []
             for page in client.reply_pages(cid):
                 _index_objects(page, users, raw_comments)
                 reply_ids.extend(_listed_ids(page, raw_comments))
-            comment["replies"] = [_format_comment(raw_comments[rid], users) for rid in reply_ids]
+            comment["replies"] = [_format_comment(raw_comments[rid], users, include_raw) for rid in reply_ids]
             all_ids.extend(reply_ids)
             if i % 10 == 0 or i == len(top_ids):
                 log.info("Fetched replies for %d/%d comments", i, len(top_ids))
