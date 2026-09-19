@@ -52,6 +52,16 @@ journalctl -u foxcomments -f            # live log
 sudo -u foxcomments /opt/foxcomments/.venv/bin/python -m foxcomments status
 ```
 
+`daily_at` is **local** time, and a fresh server usually runs on UTC. Check with `timedatectl`
+and set it if you want 07:00 to mean 07:00 where you are:
+
+```bash
+sudo timedatectl set-timezone America/New_York   # or leave it on UTC and set daily_at accordingly
+```
+
+Only the schedule is affected. Everything stored in the database is `timestamptz`, so the
+data is unambiguous either way.
+
 The service sleeps until `daily_at` (07:00 by default), runs discovery, then scrapes the
 queue across the worker window, and sleeps again. It wakes hourly, so a machine that was
 off at 07:00 catches up as soon as it comes back rather than skipping the day. Each run is
