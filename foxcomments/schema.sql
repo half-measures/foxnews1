@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS articles (
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS scrape_after TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS articles_queue_idx ON articles (status, scrape_after, discovered_at);
 CREATE INDEX IF NOT EXISTS articles_published_idx ON articles (published_at);
+-- Watermark for downstream ETL: "everything written since my last pull".
+CREATE INDEX IF NOT EXISTS articles_scraped_idx ON articles (scraped_at);
 
 CREATE TABLE IF NOT EXISTS authors (
     id            TEXT PRIMARY KEY,
@@ -31,6 +33,8 @@ CREATE TABLE IF NOT EXISTS authors (
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE INDEX IF NOT EXISTS authors_last_seen_idx ON authors (last_seen_at);
 
 CREATE TABLE IF NOT EXISTS comments (
     id                TEXT PRIMARY KEY,
@@ -56,6 +60,7 @@ CREATE INDEX IF NOT EXISTS comments_article_idx ON comments (article_id);
 CREATE INDEX IF NOT EXISTS comments_author_idx ON comments (author_id);
 CREATE INDEX IF NOT EXISTS comments_parent_idx ON comments (parent_comment_id);
 CREATE INDEX IF NOT EXISTS comments_created_idx ON comments (created_at);
+CREATE INDEX IF NOT EXISTS comments_scraped_idx ON comments (scraped_at, id);
 
 -- One row per discover/work/daily invocation, for monitoring.
 CREATE TABLE IF NOT EXISTS runs (

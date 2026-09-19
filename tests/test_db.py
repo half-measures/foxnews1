@@ -279,6 +279,50 @@ def test_save_scrape_is_atomic(db):
     assert status_of(db, job["id"])["status"] == "in_progress"
 
 
+def test_scraped_at_is_a_usable_watermark_for_downstream_pulls(db):
+    """A downstream ETL pulls `WHERE scraped_at > last_seen`, so writes must move it."""
+    db.enqueue([art("first"), art("second")])
+    run = db.now()
+
+    job1 = db.claim_next(run, 3)
+    db.save_scrape(job1["id"], scrape_result())
+    watermark = db.conn.execute("SELECT max(scraped_at) AS w FROM comments").fetchone()["w"]
+
+    job2 = db.claim_next(run, 3)
+    second = scrape_result(comments=[{
+        "id": "c2", "body": "later", "created": "2026-09-16T13:00:00.000Z", "updated": None,
+        "edited": False, "deleted": False, "pinned": False, "score": 0, "parent_comment_id": None,
+        "author": {"id": "u2", "username": "bob", "display_name": "Bob"},
+        "images": [], "videos": [], "reaction_total": 0, "reactions": {}, "replies": [],
+    }])
+    db.save_scrape(job2["id"], second)
+
+    new_rows = db.conn.execute(
+        "SELECT id, scraped_at FROM comments WHERE scraped_at > %s ORDER BY scraped_at, id", (watermark,)
+    ).fetchall()
+    assert [r["id"] for r in new_rows] == ["c2"]
+
+    # Re-scraping an existing comment also moves the watermark, so edits are picked up.
+    watermark = new_rows[-1]["scraped_at"]
+    db.save_scrape(job1["id"], scrape_result())
+    changed = db.conn.execute(
+        "SELECT id FROM comments WHERE scraped_at > %s", (watermark,)
+    ).fetchall()
+    assert {r["id"] for r in changed} == {"c1", "r1"}
+
+
+def test_comments_are_never_visible_before_their_article_is_done(db):
+    """One transaction per article: an ETL never sees half an article."""
+    db.enqueue([art("story")])
+    job = db.claim_next(db.now(), 3)
+    db.save_scrape(job["id"], scrape_result())
+
+    rows = db.conn.execute(
+        "SELECT a.status FROM comments c JOIN articles a ON a.id = c.article_id"
+    ).fetchall()
+    assert rows and all(r["status"] == "done" for r in rows)
+
+
 def test_runs_and_reporting(db):
     run_id = db.start_run("daily")
     db.finish_run(run_id, {"work": {"done": 2}})
