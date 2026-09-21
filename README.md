@@ -10,7 +10,8 @@ With Docker (brings its own Python and Postgres):
 
 ```
 cp .env.example .env                        # set TZ and a Postgres password
-mkdir -p config && cp config.example.toml config/config.toml
+mkdir -p config logs                        # make these yourself, so they aren't root-owned
+cp config.example.toml config/config.toml
 docker compose up -d                        # Postgres + the scraper on its daily schedule
 ```
 

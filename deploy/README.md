@@ -11,7 +11,8 @@ Needs Docker Engine with the compose plugin.
 git clone <your-repo> foxcomments && cd foxcomments
 
 cp .env.example .env                        # set TZ and a Postgres password
-mkdir -p config && cp config.example.toml config/config.toml
+mkdir -p config logs                        # create these yourself: see Logs below
+cp config.example.toml config/config.toml
 nano config/config.toml                     # keywords, daily_at, window
 
 docker compose up -d                        # builds the image, starts Postgres + scraper
@@ -53,6 +54,26 @@ echo 'DATABASE_URL=postgresql://user:password@dbhost:5432/foxcomments?sslmode=re
 docker compose up -d scraper
 ```
 
+### Port 5432 already in use
+
+Another Postgres on the host already owns the port, and compose refuses to start:
+
+```
+Bind for 0.0.0.0:5432 failed: port is already allocated
+```
+
+Publish this one somewhere else in `.env` and bring the stack back up:
+
+```bash
+echo 'POSTGRES_PORT=5433' >> .env
+docker compose up -d
+```
+
+Only the host-side port moves: the scraper reaches Postgres at `db:5432` over the compose
+network either way, so nothing else changes. From the host it is now
+`psql -h 127.0.0.1 -p 5433 -U foxcomments foxcomments`. `sudo ss -ltnp | grep 5432` names
+whatever holds the original port.
+
 ### Timezone
 
 `daily_at` is local time, and containers default to UTC. `TZ` in `.env` sets it:
@@ -67,7 +88,19 @@ time. Only the schedule is affected; stored data is `timestamptz` either way.
 ### Logs
 
 The journal equivalent is `docker compose logs`. Daily files also land in `./logs`, which is
-mounted into the container. Cap the container's own log growth if the host is long-lived, by
+mounted into the container.
+
+Create `./logs` before the first `docker compose up`. Docker creates a missing bind-mount
+source as `root`, and the container runs as an unprivileged user (uid 1000), which then
+cannot write there. The scraper warns and logs to the console only, so `docker compose logs`
+still works, but the daily files stay empty. To repair it afterwards:
+
+```bash
+mkdir -p logs && sudo chown 1000:1000 logs
+docker compose restart scraper
+```
+
+Adjust the uid if you changed the `useradd` line in the `Dockerfile`. Cap the container's own log growth if the host is long-lived, by
 adding to the `scraper` service:
 
 ```yaml

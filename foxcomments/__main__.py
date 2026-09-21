@@ -181,8 +181,11 @@ def _setup_logging(verbose: bool, log_file: Path | None = None) -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
     handlers = [logging.StreamHandler()]
     if log_file:
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+        try:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+        except OSError as exc:  # read-only or wrong-owner log dir: keep running, console only
+            print(f"warning: cannot write {log_file} ({exc}); logging to the console only", file=sys.stderr)
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
