@@ -18,5 +18,22 @@ services:
       timeout: 3s
       retries: 10
 
+  scraper:
+    build: .
+    image: foxcomments
+    container_name: foxcomments-scraper
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Reaches Postgres over the compose network, so the 127.0.0.1 binding above
+      # doesn't matter. Point this at any host to use a database elsewhere.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-foxcomments}:${POSTGRES_PASSWORD:-foxcomments}@db:5432/${POSTGRES_DB:-foxcomments}}
+      TZ: ${TZ:-UTC}   # `daily_at` is local time; set this to your zone
+    volumes:
+      - ./config:/app/config:ro   # put config.toml here; defaults apply if empty
+      - ./logs:/app/logs
+
 volumes:
   foxcomments-pgdata:

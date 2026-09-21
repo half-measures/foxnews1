@@ -1,0 +1,13 @@
+.git/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+logs/
+output/
+tests/
+deploy/
+config/
+config.toml
+.env
+README.md

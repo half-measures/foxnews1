@@ -6,9 +6,22 @@ Fox News comments run on Fox's own "hedgehog" platform (`api.community.fox.com`)
 
 ## Setup
 
+With Docker (brings its own Python and Postgres):
+
+```
+cp .env.example .env                        # set TZ and a Postgres password
+mkdir -p config && cp config.example.toml config/config.toml
+docker compose up -d                        # Postgres + the scraper on its daily schedule
+```
+
+Without Docker:
+
 ```
 pip install -r requirements.txt
+cp config.example.toml config.toml
 ```
+
+Full instructions for a headless Linux host, either way, are in **[deploy/README.md](deploy/README.md)**.
 
 ## Daily database pipeline
 
@@ -55,7 +68,7 @@ This stays running and does the daily run at `daily_at` (07:00 by default, local
 
 On SIGTERM or SIGINT it puts the article it was working on back in the queue, then exits, so a restart never strands one.
 
-**[deploy/README.md](deploy/README.md) has the headless Linux setup**: a systemd unit, pointing at a remote database, log rotation, and how to reach the database for ETL.
+In Docker this is the `scraper` service, already set to `restart: unless-stopped`. **[deploy/README.md](deploy/README.md) has both deployment paths** — Docker, or a systemd unit with a virtualenv — plus pointing it at a remote database, log rotation, and how an ETL program should read the tables.
 
 `python -m foxcomments daily` is still a one-shot run that exits when finished, if you prefer cron or a systemd timer. Concurrent runs are safe: articles are claimed with `FOR UPDATE SKIP LOCKED`, so two processes never scrape the same one.
 

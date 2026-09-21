@@ -1,6 +1,84 @@
 # Deploying on a headless Linux host
 
-Nothing here is Windows-specific; the scheduler is plain Python and runs under systemd.
+Two ways to run this. Docker is fewer steps and brings its own Python and Postgres;
+the systemd route suits a host that already has Postgres or doesn't run Docker.
+
+# Option A: Docker (fewest steps)
+
+Needs Docker Engine with the compose plugin.
+
+```bash
+git clone <your-repo> foxcomments && cd foxcomments
+
+cp .env.example .env                        # set TZ and a Postgres password
+mkdir -p config && cp config.example.toml config/config.toml
+nano config/config.toml                     # keywords, daily_at, window
+
+docker compose up -d                        # builds the image, starts Postgres + scraper
+```
+
+That's it. The scraper creates its tables on first start, runs discovery straight away, then
+settles into the daily schedule. `restart: unless-stopped` brings both containers back after
+a reboot, so nothing else needs configuring.
+
+Day to day:
+
+```bash
+docker compose logs -f scraper              # live log
+docker compose run --rm scraper status      # queue summary
+docker compose run --rm scraper discover --dry-run
+docker compose down                         # stop; data survives in the named volume
+git pull && docker compose up -d --build    # update
+```
+
+`docker compose run --rm scraper <anything>` works for every command in the CLI, since the
+image's entrypoint is `python -m foxcomments`.
+
+**Settings live in two files.** `.env` holds the Postgres password, `TZ`, and optionally
+`DATABASE_URL`; compose reads it automatically. `config/config.toml` holds the scraping
+settings and is mounted read-only into the container. Editing it needs only a
+`docker compose restart scraper`. With no `config/config.toml` at all the built-in defaults
+apply, so the stack still starts.
+
+Pass environment variables through `.env` rather than the shell. Compose reads `.env`
+reliably, whereas `VAR=x docker compose up` depends on the shell (a value containing a slash
+silently fails to reach the container under Git Bash on Windows, for instance).
+
+### Using a database elsewhere
+
+Set `DATABASE_URL` in `.env` and start only the scraper, leaving the bundled Postgres out:
+
+```bash
+echo 'DATABASE_URL=postgresql://user:password@dbhost:5432/foxcomments?sslmode=require' >> .env
+docker compose up -d scraper
+```
+
+### Timezone
+
+`daily_at` is local time, and containers default to UTC. `TZ` in `.env` sets it:
+
+```bash
+TZ=America/New_York
+```
+
+Confirm with `docker compose run --rm scraper status`, whose log lines are stamped in local
+time. Only the schedule is affected; stored data is `timestamptz` either way.
+
+### Logs
+
+The journal equivalent is `docker compose logs`. Daily files also land in `./logs`, which is
+mounted into the container. Cap the container's own log growth if the host is long-lived, by
+adding to the `scraper` service:
+
+```yaml
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+```
+
+# Option B: systemd and a virtualenv
+
+Nothing here is Windows-specific; the scheduler is plain Python.
 
 ## 1. Install
 
@@ -24,17 +102,14 @@ Put the connection string in an environment file rather than `config.toml`, so t
 password isn't in the repo:
 
 ```bash
-printf 'DATABASE_URL=postgresql://foxcomments:PASSWORD@dbhost:5432/foxcomments?sslmode=require\n' \
-  | sudo tee /etc/foxcomments.env
+printf 'DATABASE_URL=postgresql://foxcomments:PASSWORD@dbhost:5432/foxcomments?sslmode=require
+'   | sudo tee /etc/foxcomments.env
 sudo chmod 600 /etc/foxcomments.env
 ```
 
 `DATABASE_URL` overrides `config.toml`. Tables are created on first run, so a fresh
 empty database is all that's needed. Drop `?sslmode=require` if the server has no TLS
 (fine over a trusted LAN, but prefer TLS or an SSH tunnel otherwise).
-
-Running Postgres on the same box instead? `docker compose up -d` still works, or use the
-distribution's `postgresql` package and point `DATABASE_URL` at `127.0.0.1`.
 
 ## 3. Run it as a service
 
@@ -52,23 +127,15 @@ journalctl -u foxcomments -f            # live log
 sudo -u foxcomments /opt/foxcomments/.venv/bin/python -m foxcomments status
 ```
 
-`daily_at` is **local** time, and a fresh server usually runs on UTC. Check with `timedatectl`
-and set it if you want 07:00 to mean 07:00 where you are:
+Cloned somewhere other than `/opt/foxcomments`? Update `WorkingDirectory`, `ExecStart` and
+`ReadWritePaths` in the unit file: `ProtectSystem=strict` blocks writes outside the paths
+listed there.
+
+`daily_at` is **local** time, and a fresh server usually runs on UTC:
 
 ```bash
-sudo timedatectl set-timezone America/New_York   # or leave it on UTC and set daily_at accordingly
+sudo timedatectl set-timezone America/New_York   # or leave UTC and set daily_at to match
 ```
-
-Only the schedule is affected. Everything stored in the database is `timestamptz`, so the
-data is unambiguous either way.
-
-The service sleeps until `daily_at` (07:00 by default), runs discovery, then scrapes the
-queue across the worker window, and sleeps again. It wakes hourly, so a machine that was
-off at 07:00 catches up as soon as it comes back rather than skipping the day. Each run is
-recorded in the `runs` table, so it runs at most once per scheduled slot.
-
-`systemctl stop` sends SIGTERM, and the scraper puts the in-flight article back in the queue
-before exiting. No article is stranded by a restart or reboot.
 
 ### Prefer cron or a systemd timer?
 
@@ -79,10 +146,11 @@ approach works too:
 0 7 * * * cd /opt/foxcomments && .venv/bin/python -m foxcomments daily
 ```
 
-Concurrent runs are safe either way: articles are claimed with `FOR UPDATE SKIP LOCKED`,
-so two processes never scrape the same article, and re-discovering an article is a no-op.
+It gives up the things the service does for you: catching up a run missed while the machine
+was off, and releasing the in-flight article on shutdown instead of waiting for the stale
+sweep.
 
-## 4. Logs
+### Logs
 
 Logs go to the journal and to `logs/foxcomments-YYYY-MM-DD.log`. The files are small
 (a few KB per run) but nothing deletes them, so add a logrotate rule if the host is
@@ -99,6 +167,14 @@ long-lived:
 ```
 
 Set `dir = ""` under `[logging]` in `config.toml` to use the journal alone.
+
+# Both options
+
+Concurrent runs are safe: articles are claimed with `FOR UPDATE SKIP LOCKED`, so two
+processes never scrape the same article, and re-discovering an article is a no-op. The
+service runs at most once per scheduled slot, recorded in the `runs` table, and catches up a
+slot missed while the machine was off. On SIGTERM it returns the in-flight article to the
+queue before exiting.
 
 ## Reaching the database from elsewhere (ETL)
 

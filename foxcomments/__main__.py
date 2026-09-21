@@ -16,6 +16,7 @@ Database pipeline (settings in config.toml):
 import argparse
 import json
 import logging
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -225,7 +226,8 @@ def main() -> None:
         ("service", "Stay running and do the daily run at the scheduled time"),
     ]:
         dp = sub.add_parser(name, help=help_text)
-        dp.add_argument("-c", "--config", default="config.toml", help="Config file (default: config.toml)")
+        dp.add_argument("-c", "--config", default=os.environ.get("FOXCOMMENTS_CONFIG", "config.toml"),
+                        help="Config file (default: config.toml, or $FOXCOMMENTS_CONFIG)")
         dp.add_argument("-v", "--verbose", action="store_true")
         if name == "discover":
             dp.add_argument("--dry-run", action="store_true", help="Show what would be queued without queueing")
