@@ -1,0 +1,2 @@
+# Keep LF in the repo so files check out correctly on Linux hosts and in images.
+* text=auto eol=lf
