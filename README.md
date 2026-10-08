@@ -46,12 +46,20 @@ Deploying to a headless Linux host is in **[deploy/README.md](deploy/README.md)*
 1. **Discover.** It scans the configured feeds (and site search, if `use_search = true`) for titles that match your keywords. It skips articles already in the database. Up to `max_new_articles` of the newest matches are added to the queue as `pending`. Extra matches beyond the cap aren't queued. They're found again next run if they're still in the feeds.
 2. **Work.** It scrapes every ready article, spacing them so the queue finishes close to the end of `window_minutes`. For example, 10 articles in 90 minutes means about one every 9 minutes, with ±25% randomness. The wait is recalculated after each article, so slow scrapes don't push the run past the window.
 
-**Articles mature before they're scraped.** Comments keep arriving for a day or two after publication, and each article is scraped only once, so scraping a fresh article would capture almost nothing. Every article gets a `scrape_after` time of `min_article_age_hours` (24 by default) past its publication date, and the work step ignores it until then. Discovery still records it immediately, because feeds drop articles within hours and a missed article never comes back. So an article found this morning is typically scraped by tomorrow's run. Articles with no publication date (site search sometimes omits it) wait that long from when they were found. Set `min_article_age_hours = 0` to scrape as soon as an article is found.
+**Articles mature before they're scraped.** Comments keep arriving for a day or two after publication, so scraping a fresh article would capture almost nothing. Every article gets a `scrape_after` time of `min_article_age_hours` (24 by default) past its publication date, and the work step ignores it until then. Discovery still records it immediately, because feeds drop articles within hours and a missed article never comes back. So an article found this morning is typically scraped by tomorrow's run. Articles with no publication date (site search sometimes omits it) wait that long from when they were found. Set `min_article_age_hours = 0` to scrape as soon as an article is found.
 
-Each article is scraped once, at least `min_article_age_hours` after it was published. Its status moves through `pending` → `in_progress` → one of:
+Each article is first scraped at least `min_article_age_hours` after it was published. Its status moves through `pending` → `in_progress` → one of:
 - `done`
 - `no_comments`: the article has comments disabled
 - `failed`: an error. It's retried on later runs until it has had `max_attempts` tries.
+
+**Done articles are re-scraped** at each of `rescrape_after_hours` (72 and 168 hours after publication by default) to pick up comments posted since, plus updated text and reaction counts. A re-scrape runs on the first daily run after its time and goes through the same queue and pacing. An article scraped too late for a slot skips it rather than being scraped twice in a row. A re-scrape that fails leaves the article `done` with what it already had and moves on to the next slot. Each re-scrape costs as many requests as the first scrape, so the default roughly triples the daily load. Set `rescrape_after_hours = []` to scrape each article once.
+
+To catch up articles that finished before re-scrapes existed, or that are past their last slot, queue them by hand. The next run re-scrapes them all, paced across the window:
+
+```sql
+UPDATE articles SET rescrape_at = now() WHERE status = 'done';
+```
 
 If the process is killed partway through an article, that article goes back to `pending` on the next run. On Ctrl+C this happens right away.
 

@@ -25,6 +25,9 @@ class WorkerConfig:
     window_minutes: float = 90    # spread the queue across this long
     min_gap_seconds: float = 30   # never start articles closer together than this
     max_attempts: int = 3         # failed articles are retried on later runs up to this many tries
+    # Re-scrape finished articles this many hours after publication, to pick up later comments
+    # and updated reactions. [] = scrape each article once.
+    rescrape_after_hours: list[float] = field(default_factory=lambda: [72, 168])
 
 
 @dataclass
@@ -82,6 +85,8 @@ def load_config(path: str | Path | None) -> Config:
         raise ValueError(f"Unknown feed(s): {', '.join(sorted(bad_feeds))}. Choices: {' '.join(FEEDS)}")
     if not cfg.discovery.keywords:
         raise ValueError("[discovery] keywords must not be empty")
+    if any(h <= 0 for h in cfg.worker.rescrape_after_hours):
+        raise ValueError("[worker] rescrape_after_hours must all be positive")
 
     from .service import parse_daily_at  # validate the schedule up front, not at 07:00
     parse_daily_at(cfg.schedule.daily_at)

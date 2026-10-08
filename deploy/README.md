@@ -287,8 +287,8 @@ likes downstream, re-deriving everything from scratch whenever it wants.
 `comments.raw` holds each comment's complete API object, including the ~20 fields the
 columns don't model (`flagged`, `sensitiveMaterial`, `quoted`, `threadParent`,
 `scoreComputed`, `links` and friends), so a later ETL can mine something this schema never
-anticipated. Articles are scraped once, so anything not captured at scrape time is gone for
-good; that column is the insurance. Set `store_raw = false` under `[scraper]` to skip it and
+anticipated. Articles stop being scraped after their last re-scrape (`rescrape_after_hours`),
+so anything not captured by then is gone for good; that column is the insurance. Set `store_raw = false` under `[scraper]` to skip it and
 roughly halve the storage.
 
 Guarantees this side of the line upholds:
@@ -309,7 +309,7 @@ Every table carries a watermark column, indexed for this purpose:
 | Table | Watermark | Moves when |
 |---|---|---|
 | `comments` | `scraped_at` | The comment is first stored, or re-stored with new text/reactions |
-| `articles` | `scraped_at` | The article finishes scraping |
+| `articles` | `scraped_at` | The article finishes scraping, or a re-scrape of it finishes |
 | `authors` | `last_seen_at` | The author is seen on any newly stored comment |
 
 A pull looks like this, keeping the largest `scraped_at` it has seen:

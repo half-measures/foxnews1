@@ -22,13 +22,27 @@ log = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
-# Ready = old enough to scrape, and either never tried or failed on an earlier run with attempts left.
+# Ready = old enough to scrape, and either never tried or failed on an earlier run with attempts left;
+# or already scraped and due a re-scrape.
 _READY_WHERE = """
-    scrape_after <= now()
-    AND (
-        status = 'pending'
-        OR (status = 'failed' AND attempts < %(max_attempts)s AND last_attempt_at < %(run_started)s)
+    (
+        scrape_after <= now()
+        AND (
+            status = 'pending'
+            OR (status = 'failed' AND attempts < %(max_attempts)s AND last_attempt_at < %(run_started)s)
+        )
     )
+    OR (status = 'done' AND rescrape_at <= now())
+"""
+
+# A claimed article with a scraped_at is a re-scrape: it goes back to `done` rather than
+# `pending` or `failed`, and doesn't use up the attempts meant for its first scrape.
+_IS_RESCRAPE = "scraped_at IS NOT NULL"
+
+# Return a claimed article to where it was, without counting the claim as an attempt.
+_UNCLAIM = f"""
+    status = CASE WHEN {_IS_RESCRAPE} THEN 'done' ELSE 'pending' END,
+    attempts = CASE WHEN {_IS_RESCRAPE} THEN attempts ELSE GREATEST(attempts - 1, 0) END
 """
 
 
@@ -155,18 +169,41 @@ class Database:
     def reset_stale(self, older_than_minutes: int = 120) -> int:
         """Put back articles stuck in_progress (e.g. the process was killed mid-scrape)."""
         return self._execute(
-            """
-            UPDATE articles SET status = 'pending', attempts = GREATEST(attempts - 1, 0)
+            f"""
+            UPDATE articles SET {_UNCLAIM}
             WHERE status = 'in_progress' AND last_attempt_at < now() - make_interval(mins => %s)
             """,
             (older_than_minutes,),
+        ).rowcount
+
+    def schedule_rescrapes(self, after_hours: list[float]) -> int:
+        """Give each done article with no re-scrape pending its next one: the first of
+        `after_hours` (counted from publication) that is still in the future.
+
+        Articles past the last one stay unscheduled. Returns how many were scheduled.
+        """
+        if not after_hours:
+            return 0
+        return self._execute(
+            """
+            WITH due AS (
+                SELECT id, min(COALESCE(published_at, discovered_at) + make_interval(secs => h * 3600)) AS at
+                FROM articles, unnest(%s::float8[]) AS h
+                WHERE status = 'done' AND rescrape_at IS NULL
+                  AND COALESCE(published_at, discovered_at) + make_interval(secs => h * 3600) > now()
+                GROUP BY id
+            )
+            UPDATE articles SET rescrape_at = due.at FROM due WHERE articles.id = due.id
+            """,
+            (list(after_hours),),
         ).rowcount
 
     def claim_next(self, run_started: datetime, max_attempts: int) -> dict | None:
         """Atomically take the oldest ready article and mark it in_progress."""
         return self._execute(
             f"""
-            UPDATE articles SET status = 'in_progress', attempts = attempts + 1, last_attempt_at = now()
+            UPDATE articles SET status = 'in_progress', last_attempt_at = now(),
+                                attempts = attempts + (NOT ({_IS_RESCRAPE}))::int
             WHERE id = (
                 SELECT id FROM articles
                 WHERE {_READY_WHERE}
@@ -174,7 +211,7 @@ class Database:
                 LIMIT 1
                 FOR UPDATE SKIP LOCKED
             )
-            RETURNING id, url, title, attempts
+            RETURNING id, url, title, attempts, {_IS_RESCRAPE} AS rescrape
             """,
             {"run_started": run_started, "max_attempts": max_attempts},
         ).fetchone()
@@ -187,9 +224,14 @@ class Database:
 
     def release(self, article_id: int) -> None:
         """Undo a claim without counting it as an attempt (e.g. on Ctrl+C or shutdown)."""
+        self._execute(f"UPDATE articles SET {_UNCLAIM} WHERE id = %s", (article_id,))
+
+    def mark_rescrape_failed(self, article_id: int, error: str) -> None:
+        """A re-scrape went wrong: keep what the earlier scrape stored and move on to the next
+        scheduled re-scrape, if any."""
         self._execute(
-            "UPDATE articles SET status = 'pending', attempts = GREATEST(attempts - 1, 0) WHERE id = %s",
-            (article_id,),
+            "UPDATE articles SET status = 'done', rescrape_at = NULL, last_error = %s WHERE id = %s",
+            (error, article_id),
         )
 
     def mark_failed(self, article_id: int, error: str) -> None:
@@ -204,8 +246,12 @@ class Database:
 
     # --- results -------------------------------------------------------------
 
-    def save_scrape(self, article_id: int, result: dict) -> None:
-        """Store a scrape_article() result and mark the article done, in one transaction."""
+    def save_scrape(self, article_id: int, result: dict) -> int:
+        """Store a scrape_article() result and mark the article done, in one transaction.
+
+        Returns how many comments (including replies) weren't stored before, which on a
+        re-scrape is what was posted since the last one.
+        """
         flat = []
         for top in result["comments"]:
             flat.append(top)
@@ -217,8 +263,14 @@ class Database:
             if a["id"]:
                 authors[a["id"]] = (a["id"], a["username"], a["display_name"])
 
+        def stored(cur) -> int:
+            return cur.execute(
+                "SELECT count(*) AS n FROM comments WHERE article_id = %s", (article_id,)
+            ).fetchone()["n"]
+
         def operation(conn):
             with conn.transaction(), conn.cursor() as cur:
+                before = stored(cur)
                 cur.executemany(
                     """
                     INSERT INTO authors (id, username, display_name) VALUES (%s, %s, %s)
@@ -256,7 +308,7 @@ class Database:
                 cur.execute(
                     """
                     UPDATE articles SET
-                        status = 'done', last_error = NULL, scraped_at = now(),
+                        status = 'done', last_error = NULL, scraped_at = now(), rescrape_at = NULL,
                         comment_thread_id = %s, title = COALESCE(%s, title),
                         top_level_count = %s, reply_count = %s
                     WHERE id = %s
@@ -266,8 +318,9 @@ class Database:
                         result["counts"]["top_level_comments"], result["counts"]["replies"], article_id,
                     ),
                 )
+                return stored(cur) - before
 
-        self._run(operation)
+        return self._run(operation)
 
     # --- reporting -----------------------------------------------------------
 
@@ -279,7 +332,8 @@ class Database:
             """
             SELECT (SELECT count(*) FROM comments) AS comments,
                    (SELECT count(*) FROM authors) AS authors,
-                   (SELECT count(*) FROM articles WHERE status = 'pending' AND scrape_after > now()) AS waiting
+                   (SELECT count(*) FROM articles WHERE status = 'pending' AND scrape_after > now()) AS waiting,
+                   (SELECT count(*) FROM articles WHERE rescrape_at IS NOT NULL) AS rescrapes_scheduled
             """
         ).fetchone()
         return {"articles": {r["status"]: r["n"] for r in rows}, **totals}

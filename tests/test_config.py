@@ -23,6 +23,7 @@ def test_missing_file_gives_defaults(tmp_path):
     assert cfg.discovery.feeds == FEEDS
     assert cfg.discovery.min_article_age_hours == 24
     assert cfg.worker.window_minutes == 90
+    assert cfg.worker.rescrape_after_hours == [72, 168]
     assert cfg.scraper.rate == 1.0
 
 

@@ -23,6 +23,7 @@ daily_at = "07:00"       # local time the `service` command runs discover + work
 window_minutes = 90      # spread the queue across roughly this long
 min_gap_seconds = 30     # minimum pause between articles
 max_attempts = 3         # failed articles are retried on later runs up to this many tries
+rescrape_after_hours = [72, 168]  # re-scrape done articles this long after publication for new comments; [] = never
 
 [scraper]
 rate = 1.0               # max requests/second to Fox

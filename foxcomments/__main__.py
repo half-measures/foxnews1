@@ -159,7 +159,8 @@ def _print_status(db) -> None:
     summary = db.queue_summary()
     print(f"Articles by status: {summary['articles'] or '{}'}")
     print(f"Comments stored: {summary['comments']}   Authors: {summary['authors']}"
-          + (f"   Waiting to mature: {summary['waiting']}" if summary["waiting"] else ""))
+          + (f"   Waiting to mature: {summary['waiting']}" if summary["waiting"] else "")
+          + (f"   Re-scrapes scheduled: {summary['rescrapes_scheduled']}" if summary["rescrapes_scheduled"] else ""))
     print("\nRecent articles:")
     for a in db.recent_articles():
         counts = f"{a['top_level_count']}+{a['reply_count']}" if a["top_level_count"] is not None else "-"

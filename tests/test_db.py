@@ -359,3 +359,70 @@ def test_runs_and_reporting(db):
     assert summary["articles"] == {"in_progress": 1, "pending": 1}
     assert (summary["comments"], summary["authors"]) == (0, 0)
     assert len(db.recent_articles()) == 2
+
+
+# --- re-scrapes ----------------------------------------------------------------
+
+def scraped(db, slug, published):
+    """An article that has been scraped once, with no comments yet."""
+    db.enqueue([art(slug, published=published)])
+    job = db.claim_next(db.now(), 3)
+    db.save_scrape(job["id"], scrape_result(comments=[]))
+    return job["id"]
+
+
+def test_schedule_rescrapes_picks_the_next_slot_still_ahead(db):
+    now = db.now()
+    young = scraped(db, "young", now - timedelta(hours=30))
+    middle = scraped(db, "middle", now - timedelta(hours=100))
+    old = scraped(db, "old", now - timedelta(days=30))
+    db.enqueue([art("unscraped", published=now - timedelta(hours=30))])
+
+    assert db.schedule_rescrapes([72, 168]) == 2
+    assert close_to(status_of(db, young)["rescrape_at"], now + timedelta(hours=42))
+    assert close_to(status_of(db, middle)["rescrape_at"], now + timedelta(hours=68))
+    assert status_of(db, old)["rescrape_at"] is None, "past the last slot: left alone"
+    assert db.queue_summary()["rescrapes_scheduled"] == 2
+
+    assert db.schedule_rescrapes([72, 168]) == 0, "already scheduled ones are untouched"
+    assert db.schedule_rescrapes([]) == 0
+
+
+def test_due_rescrape_is_claimed_without_using_an_attempt_and_counts_new_comments(db):
+    article_id = scraped(db, "story", db.now() - timedelta(hours=80))
+    db.conn.execute("UPDATE articles SET rescrape_at = now() - interval '1 minute'")
+
+    run = db.now()
+    assert db.count_ready(run, 3) == 1
+    job = db.claim_next(run, 3)
+    assert job["rescrape"] is True
+    assert job["attempts"] == 1, "the first scrape's attempt; re-scrapes don't add to it"
+
+    assert db.save_scrape(article_id, scrape_result()) == 2  # c1 and r1 are new
+    row = status_of(db, article_id)
+    assert (row["status"], row["rescrape_at"]) == ("done", None)
+    assert db.count_ready(db.now(), 3) == 0
+
+    assert db.save_scrape(article_id, scrape_result()) == 0, "nothing new the second time"
+
+
+def test_interrupted_or_failed_rescrape_goes_back_to_done(db):
+    article_id = scraped(db, "story", db.now() - timedelta(hours=80))
+    db.conn.execute("UPDATE articles SET rescrape_at = now() - interval '1 minute'")
+
+    db.claim_next(db.now(), 3)
+    db.release(article_id)
+    row = status_of(db, article_id)
+    assert (row["status"], row["attempts"]) == ("done", 1)
+    assert db.count_ready(db.now(), 3) == 1, "still due"
+
+    db.claim_next(db.now(), 3)
+    db.conn.execute("UPDATE articles SET last_attempt_at = now() - interval '3 hours'")
+    assert db.reset_stale(older_than_minutes=120) == 1
+    assert status_of(db, article_id)["status"] == "done"
+
+    db.claim_next(db.now(), 3)
+    db.mark_rescrape_failed(article_id, "boom")
+    row = status_of(db, article_id)
+    assert (row["status"], row["rescrape_at"], row["last_error"]) == ("done", None, "boom")
+    assert db.count_ready(db.now(), 3) == 0

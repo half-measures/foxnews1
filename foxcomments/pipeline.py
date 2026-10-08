@@ -51,6 +51,9 @@ def work(db: Database, client: FoxCommentsClient, cfg: Config, window_minutes: f
     reset = db.reset_stale()
     if reset:
         log.info("Re-queued %d stale in-progress article(s)", reset)
+    scheduled = db.schedule_rescrapes(w.rescrape_after_hours)
+    if scheduled:
+        log.info("Scheduled a later re-scrape for %d finished article(s)", scheduled)
 
     total = db.count_ready(run_started, w.max_attempts)
     waiting = db.queue_summary()["waiting"]
@@ -58,7 +61,11 @@ def work(db: Database, client: FoxCommentsClient, cfg: Config, window_minutes: f
              total, f" ({waiting} still maturing)" if waiting else "", window / 60)
 
     while (job := db.claim_next(run_started, w.max_attempts)) is not None:
-        log.info("Scraping (attempt %d): %s", job["attempts"], job["title"])
+        rescrape = job["rescrape"]
+        if rescrape:
+            log.info("Re-scraping for new comments: %s", job["title"])
+        else:
+            log.info("Scraping (attempt %d): %s", job["attempts"], job["title"])
         started = time.monotonic()
         try:
             result = scrape_article(
@@ -68,26 +75,38 @@ def work(db: Database, client: FoxCommentsClient, cfg: Config, window_minutes: f
                 include_raw=s.store_raw,
                 max_pages=s.max_pages or None,
             )
-        except NoCommentsError as exc:
-            db.mark_no_comments(job["id"], str(exc))
-            stats["no_comments"] += 1
-            log.info("  no comment section")
         except KeyboardInterrupt:
             db.release(job["id"])
             log.warning("Interrupted; article returned to the queue")
             raise
         except Exception as exc:
-            db.mark_failed(job["id"], f"{type(exc).__name__}: {exc}")
-            stats["failed"] += 1
-            log.exception("  failed")
+            if rescrape:
+                # Keep what the earlier scrape stored; the next scheduled re-scrape tries again.
+                db.mark_rescrape_failed(job["id"], f"{type(exc).__name__}: {exc}")
+                stats["rescrape_failed"] += 1
+                log.exception("  re-scrape failed")
+            elif isinstance(exc, NoCommentsError):
+                db.mark_no_comments(job["id"], str(exc))
+                stats["no_comments"] += 1
+                log.info("  no comment section")
+            else:
+                db.mark_failed(job["id"], f"{type(exc).__name__}: {exc}")
+                stats["failed"] += 1
+                log.exception("  failed")
         else:
-            db.save_scrape(job["id"], result)
+            new_comments = db.save_scrape(job["id"], result)
             c = result["counts"]
-            stats["done"] += 1
-            stats["comments"] += c["top_level_comments"]
-            stats["replies"] += c["replies"]
-            log.info("  saved %d comments + %d replies in %.0fs",
-                     c["top_level_comments"], c["replies"], time.monotonic() - started)
+            if rescrape:
+                stats["rescraped"] += 1
+                stats["new_comments"] += new_comments
+                log.info("  %d new comments/replies since the last scrape (%d + %d in total) in %.0fs",
+                         new_comments, c["top_level_comments"], c["replies"], time.monotonic() - started)
+            else:
+                stats["done"] += 1
+                stats["comments"] += c["top_level_comments"]
+                stats["replies"] += c["replies"]
+                log.info("  saved %d comments + %d replies in %.0fs",
+                         c["top_level_comments"], c["replies"], time.monotonic() - started)
 
         remaining = db.count_ready(run_started, w.max_attempts)
         if remaining == 0:

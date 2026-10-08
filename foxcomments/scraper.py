@@ -37,8 +37,8 @@ def _format_comment(raw: dict, users: dict, include_raw: bool = True) -> dict:
         "videos": raw.get("videos") or [],
     }
     if include_raw:
-        # Keep the whole API object: each article is scraped once, so a field dropped
-        # here is gone for good.
+        # Keep the whole API object: an article stops being scraped after its last
+        # re-scrape, so a field dropped here is gone for good.
         formatted["raw"] = raw
     return formatted
 

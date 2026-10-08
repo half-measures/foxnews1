@@ -221,3 +221,28 @@ def test_work_passes_scraper_settings(db, client, session, cfg, pipeline_clock):
     assert not session.urls("/replies/")
     assert not [c for c in session.calls if c[0] == "POST"]
     assert len(session.urls("/topics/tree/all/")) == 1
+
+
+def test_work_rescrapes_due_articles_for_new_comments(db, client, session, cfg, pipeline_clock):
+    embed = "00000000-0000-0000-0000-000000000042"
+    url = fox_article(session, "story", n_comments=2, embed=embed)
+    db.enqueue([found(url, published=db.now() - timedelta(hours=30))])
+    assert pipeline.work(db, client, cfg, window_minutes=0)["done"] == 1
+
+    # The next run schedules it for 72h after publication; nothing is due yet.
+    assert pipeline.work(db, client, cfg, window_minutes=0) == {}
+    assert db.queue_summary()["rescrapes_scheduled"] == 1
+
+    session.comment_pages[embed] = {
+        "0": page([comment(f"story-c{i}", creator="u1") for i in range(3)], users=[user("u1")]),
+    }
+    db.conn.execute("UPDATE articles SET rescrape_at = now() - interval '1 minute'")
+    assert pipeline.work(db, client, cfg, window_minutes=0) == {"rescraped": 1, "new_comments": 1}
+    assert statuses(db) == {"story": "done"}
+    assert db.conn.execute("SELECT count(*) AS n FROM comments").fetchone()["n"] == 3
+
+    # A re-scrape that fails keeps the article and its comments.
+    del session.pages[url]
+    db.conn.execute("UPDATE articles SET rescrape_at = now() - interval '1 minute'")
+    assert pipeline.work(db, client, cfg, window_minutes=0) == {"rescrape_failed": 1}
+    assert statuses(db) == {"story": "done"}

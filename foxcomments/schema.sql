@@ -17,10 +17,12 @@ CREATE TABLE IF NOT EXISTS articles (
     scrape_after      TIMESTAMPTZ NOT NULL DEFAULT now(),   -- let the article gather comments first
     last_attempt_at   TIMESTAMPTZ,
     scraped_at        TIMESTAMPTZ,
+    rescrape_at       TIMESTAMPTZ,                 -- next re-scrape of a done article for new comments
     top_level_count   INT,
     reply_count       INT
 );
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS scrape_after TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS rescrape_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS articles_queue_idx ON articles (status, scrape_after, discovered_at);
 CREATE INDEX IF NOT EXISTS articles_published_idx ON articles (published_at);
 -- Watermark for downstream ETL: "everything written since my last pull".
