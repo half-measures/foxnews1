@@ -12,7 +12,7 @@ With Docker (brings its own Python and Postgres):
 cp .env.example .env                        # set TZ and a Postgres password
 mkdir -p config logs                        # make these yourself, so they aren't root-owned
 cp config.example.toml config/config.toml
-docker compose up -d                        # Postgres + the scraper on its daily schedule
+docker compose up -d                        # Postgres, the scraper, and Metabase on :3000
 ```
 
 Without Docker:

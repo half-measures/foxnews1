@@ -109,6 +109,51 @@ adding to the `scraper` service:
       options: {max-size: "10m", max-file: "5"}
 ```
 
+### Metabase (analytics)
+
+`docker compose up -d` also starts [Metabase](https://www.metabase.com/) on port 3000, for
+charts and dashboards over the scraped data. A one-shot `metabase-init` container runs first
+and, inside the bundled Postgres:
+
+- creates a `metabase` database for Metabase's own settings, questions and dashboards, so
+  they survive container rebuilds and are covered by a `pg_dumpall`;
+- creates a read-only `metabase_reader` login with `SELECT` on the scraper's tables (including
+  any added later), so nothing typed into Metabase's SQL editor can change the raw data.
+
+It is idempotent and runs on every `up`, so changing `METABASE_READER_PASSWORD` in `.env` and
+running `docker compose up -d` again updates the password.
+
+First-time setup:
+
+1. In `.env`, set `METABASE_READER_PASSWORD` and, if 3000 is taken on the host,
+   `METABASE_PORT`.
+2. `docker compose up -d`. Metabase takes a minute or two to start the first time;
+   `docker compose ps` shows it `healthy` when ready.
+3. Open `http://<server-ip>:3000`, create the admin account, and at **Add your data** choose
+   PostgreSQL with:
+
+   | Field | Value |
+   |---|---|
+   | Host | `db` |
+   | Port | `5432` |
+   | Database name | `foxcomments` (your `POSTGRES_DB`) |
+   | Username | `metabase_reader` |
+   | Password | your `METABASE_READER_PASSWORD` |
+
+   Use `db`, not the server's IP or `POSTGRES_PORT`: Metabase reaches Postgres over the
+   compose network.
+
+Metabase is published on every interface so the rest of the LAN can reach it; its own login
+protects it. Put it behind a reverse proxy with TLS before exposing it beyond the LAN.
+
+It wants roughly 1-2 GB of RAM. To cap the JVM, add `JAVA_OPTS: "-Xmx1g"` under the
+`metabase` service's `environment`. To run the stack without it:
+`docker compose up -d db scraper`.
+
+Updates: the image tag `v0.64.x` follows patch releases, so `docker compose pull metabase &&
+docker compose up -d` picks them up. Bump the tag in `docker-compose.yml` for a new minor
+version; Metabase migrates its database forward on start, but not back, so take a dump first.
+
 # Option B: systemd and a virtualenv
 
 Nothing here is Windows-specific; the scheduler is plain Python.

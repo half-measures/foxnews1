@@ -35,5 +35,63 @@ services:
       - ./config:/app/config:ro   # put config.toml here; defaults apply if empty
       - ./logs:/app/logs
 
+  # One-shot setup for Metabase, safe to re-run: creates the `metabase` database that holds
+  # Metabase's own settings and dashboards, and a read-only `metabase_reader` login that
+  # Metabase uses to query the scraped tables (so a native SQL question can't alter them).
+  metabase-init:
+    image: postgres:17
+    container_name: foxcomments-metabase-init
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-foxcomments}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-foxcomments}
+      PGDATABASE: ${POSTGRES_DB:-foxcomments}
+      READER_PASSWORD: ${METABASE_READER_PASSWORD:-metabase}
+    command:
+      - sh
+      - -c
+      - |
+        psql -v ON_ERROR_STOP=1 -v pw="$$READER_PASSWORD" -v db="$$PGDATABASE" <<'SQL'
+        SELECT 'CREATE DATABASE metabase'
+         WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'metabase')\gexec
+        SELECT 'CREATE ROLE metabase_reader LOGIN'
+         WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'metabase_reader')\gexec
+        SELECT format('ALTER ROLE metabase_reader PASSWORD %L', :'pw')\gexec
+        SELECT format('GRANT CONNECT ON DATABASE %I TO metabase_reader', :'db')\gexec
+        GRANT USAGE ON SCHEMA public TO metabase_reader;
+        GRANT SELECT ON ALL TABLES IN SCHEMA public TO metabase_reader;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO metabase_reader;
+        SQL
+
+  metabase:
+    image: metabase/metabase:v0.64.x
+    container_name: foxcomments-metabase
+    restart: unless-stopped
+    depends_on:
+      metabase-init:
+        condition: service_completed_successfully
+    environment:
+      # Metabase's own application database (not the data it analyses).
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: db
+      MB_DB_PORT: 5432
+      MB_DB_DBNAME: metabase
+      MB_DB_USER: ${POSTGRES_USER:-foxcomments}
+      MB_DB_PASS: ${POSTGRES_PASSWORD:-foxcomments}
+      JAVA_TIMEZONE: ${TZ:-UTC}
+    ports:
+      # Published on every interface so other machines on the LAN can open it.
+      - "${METABASE_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail -s http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+
 volumes:
   foxcomments-pgdata:
